@@ -22,6 +22,7 @@ try {
 }
 
 const app = express();
+app.set('trust proxy', 1); // Trust Render reverse proxy for rate limiting
 
 // Parse and normalize allowed origins from FRONTEND_URL
 const allowedOrigins = (config.frontendUrl || '')

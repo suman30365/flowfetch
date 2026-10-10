@@ -171,9 +171,11 @@ class DownloaderService extends EventEmitter {
       const child = spawn(getYtDlpCommand(), args);
       job.child = child;
       let resolved = false;
+      let stderrData = '';
 
       child.stderr.on('data', (data: Buffer) => {
         const output = data.toString();
+        stderrData += output;
         
         // Resolve early if we see [info], meaning extraction successfully started.
         // We leave stdout untouched; Node will buffer it (paused mode) until piped.
@@ -203,8 +205,20 @@ class DownloaderService extends EventEmitter {
       child.on('close', (code) => {
         if (!resolved) {
           resolved = true;
-          this.updateProgress(id, { status: 'failed', error: 'EXTRACTION_BLOCKED' });
-          reject(new Error('EXTRACTION_BLOCKED: Extraction blocked by source or network.'));
+          let errorMsg = 'Extraction blocked by source or network.';
+          if (stderrData.includes('Sign in to confirm you’re not a bot')) {
+            errorMsg = 'YouTube blocked the request (Bot protection). Cloud hosting IPs like Render are frequently blocked by YouTube. Please try another video or run locally.';
+          } else if (stderrData.includes('Video unavailable') || stderrData.includes('This video is unavailable')) {
+            errorMsg = 'The requested video is unavailable, private, or region-locked.';
+          } else if (stderrData.includes('Unsupported URL')) {
+            errorMsg = 'This URL is not supported or not recognized.';
+          } else {
+            const match = stderrData.match(/ERROR:\s*(.*)/);
+            if (match) errorMsg = `Extraction failed: ${match[1]}`;
+          }
+          
+          this.updateProgress(id, { status: 'failed', error: errorMsg });
+          reject(new Error(errorMsg));
         }
       });
 
@@ -389,9 +403,21 @@ class DownloaderService extends EventEmitter {
         this.updateProgress(id, { status: 'complete', percent: 100, filename: expectedFilename });
       } else {
         console.error(`[FlowFetch] Disk job ${id} failed:`, stderrOutput);
+        let errorMsg = 'Download process failed.';
+        if (stderrOutput.includes('Sign in to confirm you’re not a bot')) {
+          errorMsg = 'YouTube blocked the request (Bot protection). Cloud hosting IPs like Render are frequently blocked by YouTube. Please try another video or run locally.';
+        } else if (stderrOutput.includes('Video unavailable') || stderrOutput.includes('This video is unavailable')) {
+          errorMsg = 'The requested video is unavailable, private, or region-locked.';
+        } else if (stderrOutput.includes('Unsupported URL')) {
+          errorMsg = 'This URL is not supported or not recognized.';
+        } else {
+          const match = stderrOutput.match(/ERROR:\s*(.*)/);
+          if (match) errorMsg = `Extraction failed: ${match[1]}`;
+        }
+
         this.updateProgress(id, {
           status: 'failed',
-          error: 'DOWNLOAD_FAILED: Download process failed.',
+          error: errorMsg,
         });
       }
     });

@@ -71,7 +71,20 @@ export const getMetadata = (url: string): Promise<YtDlpMetadata> => {
     child.on('close', (code) => {
       clearTimeout(timeout);
       if (code !== 0) {
-        return reject(new Error(`yt-dlp failed: ${stderrData}`));
+        if (stderrData.includes('Sign in to confirm you’re not a bot')) {
+          return reject(new Error('YouTube blocked the request (Bot protection). Cloud hosting IPs like Render are frequently blocked by YouTube. Please try another video or run locally.'));
+        }
+        if (stderrData.includes('Video unavailable') || stderrData.includes('This video is unavailable')) {
+          return reject(new Error('The requested video is unavailable, private, or region-locked.'));
+        }
+        if (stderrData.includes('Unsupported URL')) {
+          return reject(new Error('This URL is not supported or not recognized.'));
+        }
+        
+        // Extract the first ERROR: line if present
+        const match = stderrData.match(/ERROR:\s*(.*)/);
+        const shortError = match ? match[1] : stderrData.split('\n')[0].trim();
+        return reject(new Error(`Extraction failed: ${shortError || 'Unknown error'}`));
       }
 
       try {
