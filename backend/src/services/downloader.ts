@@ -6,6 +6,7 @@ import { config } from '../config/env';
 import EventEmitter from 'events';
 import { NormalizedFormat } from './formatCache';
 import { getYtDlpCommand, getFfmpegCommand, checkFfmpegAvailable, initBinaryPath } from '../utils/binaries';
+import { classifyYtDlpError, truncateStderr } from './ytdlpErrors';
 
 /**
  * StreamMode determines how a download job is served to the browser.
@@ -205,20 +206,15 @@ class DownloaderService extends EventEmitter {
       child.on('close', (code) => {
         if (!resolved) {
           resolved = true;
-          let errorMsg = 'Extraction blocked by source or network.';
-          if (stderrData.includes('Sign in to confirm you’re not a bot')) {
-            errorMsg = 'YouTube blocked the request (Bot protection). Cloud hosting IPs like Render are frequently blocked by YouTube. Please try another video or run locally.';
-          } else if (stderrData.includes('Video unavailable') || stderrData.includes('This video is unavailable')) {
-            errorMsg = 'The requested video is unavailable, private, or region-locked.';
-          } else if (stderrData.includes('Unsupported URL')) {
-            errorMsg = 'This URL is not supported or not recognized.';
-          } else {
-            const match = stderrData.match(/ERROR:\s*(.*)/);
-            if (match) errorMsg = `Extraction failed: ${match[1]}`;
-          }
-          
-          this.updateProgress(id, { status: 'failed', error: errorMsg });
-          reject(new Error(errorMsg));
+          // Log the raw yt-dlp output so Railway/Render dashboards show the
+          // exact upstream error (never contains cookies or credentials).
+          console.error(
+            `[FlowFetch downloader] prepareStream exited with code ${code}.`,
+            `\nStderr: ${truncateStderr(stderrData)}`,
+          );
+          const classified = classifyYtDlpError(stderrData, code);
+          this.updateProgress(id, { status: 'failed', error: classified.message });
+          reject(Object.assign(new Error(classified.message), { httpStatus: classified.httpStatus, kind: classified.kind }));
         }
       });
 
@@ -374,7 +370,7 @@ class DownloaderService extends EventEmitter {
 
     initBinaryPath();
     const child = spawn(getYtDlpCommand(), args);
-    let finalFilename = '';
+
 
     child.stdout.on('data', (data: Buffer) => {
       const output = data.toString();
@@ -402,23 +398,10 @@ class DownloaderService extends EventEmitter {
       if (code === 0) {
         this.updateProgress(id, { status: 'complete', percent: 100, filename: expectedFilename });
       } else {
-        console.error(`[FlowFetch] Disk job ${id} failed:`, stderrOutput);
-        let errorMsg = 'Download process failed.';
-        if (stderrOutput.includes('Sign in to confirm you’re not a bot')) {
-          errorMsg = 'YouTube blocked the request (Bot protection). Cloud hosting IPs like Render are frequently blocked by YouTube. Please try another video or run locally.';
-        } else if (stderrOutput.includes('Video unavailable') || stderrOutput.includes('This video is unavailable')) {
-          errorMsg = 'The requested video is unavailable, private, or region-locked.';
-        } else if (stderrOutput.includes('Unsupported URL')) {
-          errorMsg = 'This URL is not supported or not recognized.';
-        } else {
-          const match = stderrOutput.match(/ERROR:\s*(.*)/);
-          if (match) errorMsg = `Extraction failed: ${match[1]}`;
-        }
-
-        this.updateProgress(id, {
-          status: 'failed',
-          error: errorMsg,
-        });
+        // Log for Railway/Render dashboards; stderr here is the disk-download yt-dlp process.
+        console.error(`[FlowFetch downloader] Disk job ${id} exited with code ${code}.`, `\nStderr: ${truncateStderr(stderrOutput)}`);
+        const classified = classifyYtDlpError(stderrOutput, code);
+        this.updateProgress(id, { status: 'failed', error: classified.message });
       }
     });
   }

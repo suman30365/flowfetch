@@ -1,6 +1,6 @@
 import { spawn } from 'child_process';
 import { getYtDlpCommand, initBinaryPath } from '../utils/binaries';
-import { config } from '../config/env';
+import { classifyYtDlpError, truncateStderr } from './ytdlpErrors';
 
 export interface YtDlpFormat {
   format_id: string;
@@ -71,20 +71,14 @@ export const getMetadata = (url: string): Promise<YtDlpMetadata> => {
     child.on('close', (code) => {
       clearTimeout(timeout);
       if (code !== 0) {
-        if (stderrData.includes('Sign in to confirm you’re not a bot')) {
-          return reject(new Error('YouTube blocked the request (Bot protection). Cloud hosting IPs like Render are frequently blocked by YouTube. Please try another video or run locally.'));
-        }
-        if (stderrData.includes('Video unavailable') || stderrData.includes('This video is unavailable')) {
-          return reject(new Error('The requested video is unavailable, private, or region-locked.'));
-        }
-        if (stderrData.includes('Unsupported URL')) {
-          return reject(new Error('This URL is not supported or not recognized.'));
-        }
-        
-        // Extract the first ERROR: line if present
-        const match = stderrData.match(/ERROR:\s*(.*)/);
-        const shortError = match ? match[1] : stderrData.split('\n')[0].trim();
-        return reject(new Error(`Extraction failed: ${shortError || 'Unknown error'}`));
+        // Always log raw stderr to server console so Railway/Render dashboards
+        // capture the exact upstream message from yt-dlp.
+        console.error(
+          `[FlowFetch yt-dlp] getMetadata exited with code ${code}.`,
+          `\nStderr: ${truncateStderr(stderrData)}`,
+        );
+        const classified = classifyYtDlpError(stderrData, code);
+        return reject(Object.assign(new Error(classified.message), { httpStatus: classified.httpStatus, kind: classified.kind }));
       }
 
       try {

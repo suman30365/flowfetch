@@ -38,8 +38,12 @@ router.post('/', async (req: Request, res: Response) => {
       await downloader.prepareStream(jobId);
     }
   } catch (err: any) {
-    return res.status(400).json({ success: false, error: err.message });
+    const ALLOWED_STATUSES = new Set([400, 403, 422, 500]);
+    const raw = err.httpStatus;
+    const status: number = (typeof raw === 'number' && ALLOWED_STATUSES.has(raw)) ? raw : 400;
+    return res.status(status).json({ success: false, error: err.message });
   }
+
 
   return res.json({ success: true, jobId, streamMode });
 });

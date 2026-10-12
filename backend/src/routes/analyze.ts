@@ -209,11 +209,19 @@ router.post('/', async (req: Request, res: Response) => {
 
   } catch (error: any) {
     console.error('Analyze error:', error);
-    res.status(500).json({ 
-      success: false, 
-      error: error.message || 'Failed to analyze URL. The content might be private, protected, or unsupported.' 
+    // classifyYtDlpError attaches httpStatus to the thrown Error so the
+    // response accurately reflects the upstream failure reason.
+    // Allowlist prevents an unexpected value from leaking an invalid HTTP status.
+    const ALLOWED_STATUSES = new Set([400, 403, 422, 500]);
+    const raw = error.httpStatus;
+    const status: number = (typeof raw === 'number' && ALLOWED_STATUSES.has(raw)) ? raw : 500;
+    res.status(status).json({
+      success: false,
+      error: error.message || 'Failed to analyze URL. The content might be private, protected, or unsupported.',
     });
   }
+
 });
+
 
 export default router;
